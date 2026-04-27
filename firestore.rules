@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitive Definitions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Phase 4: Entity Validators
+    
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'status', 'lastSeen']) &&
+             data.keys().size() == 6 && // Including photoURL which is optional in schema but usually present
+             data.uid == request.auth.uid &&
+             data.email is string && data.email.size() <= 256 &&
+             data.displayName is string && data.displayName.size() <= 128 &&
+             data.status in ['online', 'offline', 'away'] &&
+             data.lastSeen is number;
+    }
+
+    function isValidHub(data) {
+      return data.keys().hasAll(['name', 'topic', 'createdAt']) &&
+             data.keys().size() >= 3 &&
+             data.name is string && data.name.size() <= 64 &&
+             data.topic is string && data.topic.size() <= 256 &&
+             data.createdAt is number;
+    }
+
+    function isValidMessage(data, hubId) {
+      return data.keys().hasAll(['senderId', 'senderName', 'content', 'timestamp', 'hubId']) &&
+             data.keys().size() == 5 &&
+             data.senderId == request.auth.uid &&
+             data.senderName is string && data.senderName.size() <= 128 &&
+             data.content is string && data.content.size() <= 2000 &&
+             data.timestamp is number &&
+             data.hubId == hubId;
+    }
+
+    // Rules
+    
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isOwner(userId); // Prevent mass scrapping of user profiles
+      allow create: if isOwner(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidUserProfile(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lastSeen', 'displayName', 'photoURL']);
+    }
+
+    match /hubs/{hubId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(hubId) && isValidHub(incoming());
+      allow update: if false; // Hubs are immutable for now to prevent tampering
+      
+      match /messages/{messageId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming(), hubId) &&
+                     exists(/databases/$(database)/documents/hubs/$(hubId)); // Relational integrity
+        allow update, delete: if false; // Messages are immutable
+      }
+    }
+  }
+}

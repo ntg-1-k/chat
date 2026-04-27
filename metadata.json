@@ -1,0 +1,6 @@
+{
+  "name": "OmniLink",
+  "description": "A professional, high-density global chat interface with anime-inspired animations and real-time connectivity.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["real-time-chat", "dark-mode"]
+}
